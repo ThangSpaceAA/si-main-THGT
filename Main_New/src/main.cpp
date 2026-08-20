@@ -138,7 +138,6 @@ type_mtfc_page_v_t mtfc_page_v_data;
 
 type_mtfc_page_v_t mtfc_card_config_data_glcd;
 type_mtfc_one_card_config_t mtfc_one_card_config;
-type_mtfc_one_card_config_t mtfc_one_card_config_card1;
 type_mtfc_time_location_t mtfc_time_location;
 type_mtfc_config_part1_t mtfc_config_part1;
 /////////////////////
@@ -454,6 +453,8 @@ void mtfc_update_mtfc_parameters(type_mtfc_schedule_t *schedule, type_mtfc_cycle
     mtfc_mem.mem_save_data(BLOCK_1, (char *)config, sizeof(type_mtfc_config_t));
     debug(DEBUG_GLCD, "%s\r\n", "Card saved all config!");
     mtfc_check_phase_connect_railway(mtfc_wk_base, config, schedule);
+    mtfc_check_phase_connect_option(mtfc_wk_base, config);
+
     mtfc_flag_system.is_update_config_to_cloud = true;
     mtfc_flag_system.is_card_update_card_parameters = false;
   }
@@ -1197,16 +1198,36 @@ void mtfc_gateway_processing(type_mtfc_cycle_working_package_t *mtfc_wk_base)
     }
   }
 
-#pragma endregion
+#pragma endregion 
 }
 
 #pragma endregion
 
 #pragma region XU LY CAC CAI DAT CARD DIEU KHIEN-----------------------------------------
 
+void mtfc_check_phase_connect_option(type_mtfc_cycle_working_package_t *mtfc_op, type_mtfc_config_t *mtfc_config)
+{
+  for(uint8_t j = 0 ; j < MAX_SIDE ; j ++)
+  {
+    mtfc_op->option_connect_phase_config[j] = 0;
+    if(mtfc_config->index_card[j].option_card != 0)
+    {
+      mtfc_op->option_connect_phase_config[mtfc_config->index_card[j].phase - 1] = mtfc_config->index_card[j].option_card;
+    }
+    debug(MAIN_DEBUG, "\r\noption_connect_phase_config:[%02d][%02d][%02d][%02d][%02d][%02d][%02d][%02d]",
+        mtfc_op->option_connect_phase_config[0],
+        mtfc_op->option_connect_phase_config[1],
+        mtfc_op->option_connect_phase_config[2],
+        mtfc_op->option_connect_phase_config[3],
+        mtfc_op->option_connect_phase_config[4],
+        mtfc_op->option_connect_phase_config[5],
+        mtfc_op->option_connect_phase_config[6],
+        mtfc_op->option_connect_phase_config[7]);
+  }
+}
+
 void mtfc_check_phase_connect_railway(type_mtfc_cycle_working_package_t *mtfc_wk, type_mtfc_config_t *mtfc_config, type_mtfc_schedule_t *mtfc_schedule)
 {
-  // mtfc_mem.mem_read_data(BLOCK_3, (char *)&mtfc_one_card_config_card1, sizeof(type_one_cardConfig_t));
   for (uint8_t j = 0; j < MAX_SIDE; j++)
   {
     mtfc_wk->railway_connect_phase_config[j] = 0;
@@ -1276,6 +1297,7 @@ uint8_t mtfc_card_detect(type_mtfc_cycle_working_package_t *obj)
       mtfc_is_card_feetback = false;
       time_periode_detect_card = millis();
     }
+   
     if (obj->index_card_check > 8)
     {
       if (millis() - time_out_process > 3000)
@@ -1316,6 +1338,7 @@ uint8_t mtfc_card_detect(type_mtfc_cycle_working_package_t *obj)
         return 0;
       }
     }
+    
     if (mtfc_flag_system.is_receive_card_config_feedback)
     {
       uint8_t t = check_card_com.read_slot_slect_index();
@@ -1338,7 +1361,7 @@ uint8_t count_card = 0;
 void mtfc_card_rx_event_handler(uint8_t siz)
 {
   uint8_t t = 0;
-  debug(MAIN_DEBUG, "\r\ncheck_card_com.get_cmd(): [%d]", check_card_com.get_cmd());
+  debug(MAIN_DEBUG, "\r\ncheck_card_com.get_cmd(): [%d]\r\n", check_card_com.get_cmd());
   switch (check_card_com.get_cmd())
   {
   case MSP_CARD_READ_CONFIG:
@@ -1494,13 +1517,19 @@ void mtfc_glcd_processing(type_mtfc_schedule_t *schedule, type_mtfc_cycle_workin
         else if ((check_card_com.read_slot_slect_index() == mtfc_one_card_config.slot) && (is_send_config_data == false)) // Ca
         {
           debug(MAIN_DEBUG, "one card config: %d\r\n", mtfc_one_card_config.slot);
-          for (uint8_t i; i < 32; i++)
+          for (uint8_t i = 0; i < 32; i++)
             mtfc_card_config_buff.sn[i] = mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].sn[i];
           mtfc_card_config_buff.imei = mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].imei;
           mtfc_card_config_buff.phase = mtfc_one_card_config.phase;
           mtfc_card_config_buff.is_railway_enabled = mtfc_one_card_config.is_railway;
           mtfc_card_config_buff.is_dependent_phase = mtfc_one_card_config.is_dependent_phase;
           mtfc_card_config_buff.is_walking_enabled = mtfc_one_card_config.is_walking;
+
+          mtfc_card_config_buff.option_card = mtfc_one_card_config.option_card;
+          // mtfc_card_config_buff.option_pin_config.op_red = mtfc_one_card_config.option_pin_config.op_red;
+          // mtfc_card_config_buff.option_pin_config.op_yellow = mtfc_one_card_config.option_pin_config.op_yellow;
+          // mtfc_card_config_buff.option_pin_config.op_green = mtfc_one_card_config.option_pin_config.op_green;
+
           check_card_com.send_struct(MSP_CARD_WRITE_CONFIG, (uint8_t *)&mtfc_card_config_buff, sizeof(type_one_cardConfig_t));
           mtfc_flag_system.is_card_fb_config = true;
           is_send_config_data = true;
@@ -1514,10 +1543,12 @@ void mtfc_glcd_processing(type_mtfc_schedule_t *schedule, type_mtfc_cycle_workin
           else
           {
             // Luu thanh cong copy lai cac thong so vao vung dem
-            mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].phase = mtfc_card_config_buff.phase;
+            mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].phase              = mtfc_card_config_buff.phase;
             mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].is_railway_enabled = mtfc_card_config_buff.is_railway_enabled;
             mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].is_dependent_phase = mtfc_card_config_buff.is_dependent_phase;
             mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].is_walking_enabled = mtfc_card_config_buff.is_walking_enabled;
+            mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].option_card        = mtfc_card_config_buff.option_card;
+
             mtfc_flag_system.is_card_update_card_parameters = true;
             debug(MAIN_DEBUG, "Sucessfull! Config Slot [%01d]!!\r\n", mtfc_one_card_config.slot);
           }
@@ -1871,7 +1902,7 @@ void mtfc_ex_card_com_rx_event_handler(uint8_t siz)
 
   case CMD_CPU_TO_MASTER_CHANGE_PHASE_1:
     main_rs232_com.readstruct((uint8_t *)&mtfc_one_card_config, sizeof(type_mtfc_one_card_config_t));
-    debug(MAIN_DEBUG, "\r\nOne slot card update: [%01d] [%01d] [%01d] [%01d] [%01d]", mtfc_one_card_config.slot, mtfc_one_card_config.phase, mtfc_one_card_config.is_railway, mtfc_one_card_config.is_walking, mtfc_one_card_config.is_dependent_phase);
+    debug(MAIN_DEBUG, "\r\nOne slot card update: [%01d] [%01d] [%01d] [%01d] [%01d]\r\n", mtfc_one_card_config.slot, mtfc_one_card_config.phase, mtfc_one_card_config.is_railway, mtfc_one_card_config.is_walking, mtfc_one_card_config.is_dependent_phase);
     mtfc_flag_system.is_card_one_slot_update = true;
     break;
 
@@ -2473,7 +2504,18 @@ int8_t mtfc_seek_lamp_signal_convert(type_mtfc_cycle_working_package_t *mtfc)
       bit_set(mtfc->signal[i], pin_green);
       bit_clear(mtfc->signal[i], pin_yellow);
       bit_clear(mtfc->signal[i], pin_red);
-      bit_clear(mtfc->signal[i], pin_option_1);
+#ifdef CUSTOM_OPTION_IN_MAIN
+      if(mtfc->option_connect_phase_config[i] & 0x04)
+      {
+        debug(MAIN_DEBUG,"%s\r\n" ,"co option xanh 1");
+        bit_set(mtfc->signal[i], pin_option_1);
+      }
+      else
+      {
+        bit_clear(mtfc->signal[i], pin_option_1);
+      }
+      // bit_clear(mtfc->signal[i], pin_option_1); 
+#endif
       mtfc->current_phase_is_green = i + 1;
     }
     else if ((mtfc->t_seek >= mtfc->side[i].t_start_yellow) && (mtfc->t_seek < (mtfc->side[i].t_end_yellow))) 
@@ -2482,14 +2524,16 @@ int8_t mtfc_seek_lamp_signal_convert(type_mtfc_cycle_working_package_t *mtfc)
       bit_set(mtfc->signal[i], pin_yellow);
       bit_clear(mtfc->signal[i], pin_green);
       bit_clear(mtfc->signal[i], pin_red);
-      // debug(MAIN_DEBUG, "\r\nmode_cross: %d",mode_cross);
-      if (mode_cross == 2)
+#ifdef CUSTOM_OPTION_IN_MAIN
+      if(mtfc->option_connect_phase_config[i] & 0x02)
       {
-        // debug(MAIN_DEBUG, "\r\nmode_cross: %d",mode_cross);
+        debug(MAIN_DEBUG, "%s\r\n","co option vang 1");
         bit_set(mtfc->signal[i], pin_option_1);
       }
-      else
+      else{
         bit_clear(mtfc->signal[i], pin_option_1);
+      }
+#endif
     }
     else
     {
@@ -2498,7 +2542,18 @@ int8_t mtfc_seek_lamp_signal_convert(type_mtfc_cycle_working_package_t *mtfc)
       bit_set(mtfc->signal[i], pin_red);
       bit_clear(mtfc->signal[i], pin_yellow);
       bit_clear(mtfc->signal[i], pin_green);
-      bit_set(mtfc->signal[i], pin_option_1);
+      debug(MAIN_DEBUG, "%s\r\n", "co option do 1");
+#ifdef CUSTOM_OPTION_IN_MAIN      
+      if(mtfc->option_connect_phase_config[i] & 0x01)
+      {
+        bit_set(mtfc->signal[i], pin_option_1);
+      }
+      else
+      {
+        bit_clear(mtfc->signal[i], pin_option_1);
+      }
+      // bit_set(mtfc->signal[i], pin_option_1);
+#endif
     }
 #pragma endregion
 

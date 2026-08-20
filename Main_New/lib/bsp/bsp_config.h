@@ -182,6 +182,12 @@ typedef enum _gate_request_date_t
 //     uint16_t walking_time_re_contructions;
 // } type_walking_config_para_t;
 
+typedef struct __attribute__((packed))
+{
+    uint8_t op_red; 
+    uint8_t op_yellow;
+    uint8_t op_green;
+} type_mtfc_card_config_option_t;
 
 //---------------------------------------------------------CAI DAT CARD---------------------------------------
 /**
@@ -198,6 +204,8 @@ typedef struct __attribute__((packed))
     uint8_t is_walking_enabled;
     uint8_t is_dependent_phase;
     uint8_t time_delay_dependent_phase;
+    uint8_t option_card;
+    type_mtfc_card_config_option_t option_pin_config; // phần này thêm vào để thay đổi option ngõ ra option của cardtrên phần cấu hình card trên giao diện
 } type_one_cardConfig_t;
 
 /**
@@ -478,6 +486,7 @@ typedef struct __attribute__((packed))
     uint8_t  gps_message_txt[64];               //Dung de luu message 
     uint8_t  idx_check_sensor;                  //chi so check gia tri cam bien cua tung card
     uint8_t  idx_app_schedule;                  //chi so schedule ma
+    uint8_t  option_connect_phase_config[MAX_SIDE]; //Pha ket noi ngo ra option
     uint32_t millis_ping_cycle_form;            //
 } type_mtfc_cycle_working_package_t;
 
@@ -541,8 +550,6 @@ typedef struct __attribute__((packed))
     float temperature;
 } type_mtfc_page_one_t;
 
-
-
 typedef struct __attribute__((packed))
 {
     uint16_t t_seek;                          //bien diem che do dem nguoc
@@ -576,6 +583,8 @@ typedef struct __attribute__((packed))
     uint8_t is_walking;
     uint8_t is_railway;
     uint8_t is_dependent_phase;
+    uint8_t option_card;
+    type_mtfc_card_config_option_t option_pin_config;
 } type_mtfc_one_card_config_t;
 
 typedef struct __attribute__((packed))

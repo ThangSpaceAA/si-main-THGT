@@ -371,6 +371,9 @@ void mtfc_ex_card_com_rx_event_handler(uint8_t siz);
  * @param mtfc_config 
  */
 void mtfc_sensor_detect_processing(type_mtfc_cycle_working_package_t *mtfc_wk, type_mtfc_config_t *mtfc_config);
+
+
+void mtfc_check_phase_connect_option(type_mtfc_cycle_working_package_t *mtfc_op, type_mtfc_config_t *mtfc_config);
 #pragma endregion
 
 #endif
