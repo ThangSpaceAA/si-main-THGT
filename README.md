@@ -1,0 +1,71 @@
+
+
+#### Main CPU tự khởi động
+
+- Bỏ `waitForAEquals1()` khỏi luồng boot.
+- Main CPU không còn chờ vô hạn `CMD_CPU_TO_MASTER_START` từ màn hình
+- Sau khi đọc flash, khởi tạo RTC và dò card, Main CPU tự đi vào state machine điều khiển.
+
+#### Sửa nguy cơ treo ở vòng quét card
+
+- Bỏ vòng `while` không giới hạn khi tìm card có IMEI/phase hợp lệ.
+- Mỗi lượt chỉ kiểm tra tối đa `MAX_SIDE` card.
+- Kiểm tra chỉ số trước khi truy cập `index_card[idx]`.
+- Kiểm tra phase nằm trong `1..MAX_SIDE`.
+- Nếu không có card hợp lệ, hàm kết thúc lượt quét và thử lại ở chu kỳ sau thay vì chạy vô hạn.
+
+#### Bật watchdog phần cứng
+
+- `mtfc_watdog_init()` hiện gọi `iwdg_init()` thật.
+- Dùng prescaler `IWDG_PRE_256`.
+- Watchdog được khởi động với timeout khoảng 3 giây.
+- Watchdog chỉ bắt đầu sau giai đoạn dò card vì card detection có các khoảng chờ dài
+- Main loop feed watchdog sau khi hoàn thành các tác vụ trong một vòng.
+
+
+#### Kiểm tra command từ CM4
+
+- Kiểm tra payload size trước khi xử lý các command CM4 đã biết.
+- Frame thiếu dữ liệu bị bỏ qua.
+- Payload struct lớn hơn hoặc bằng kích thước Main CPU yêu cầu vẫn được chấp nhận để giữ khả năng tương thích với padding struct phía CM4.
+- Kiểm tra `num_side` trước khi tạo schedule và reset Main CPU.
+- Lệnh START cũ vẫn hợp lệ nhưng không còn quyền quyết định Main CPU có chạy hay không.
+
+#### Kiểm tra phase đường sắt
+
+- Chỉ dùng `phase - 1` làm chỉ số khi phase nằm trong `1..MAX_SIDE`.
+- Tránh ghi ngoài mảng nếu dữ liệu card/flash bị lỗi.
+
+
+### `si-main-THGT/Main_New/lib/bsp/bsp_config.h`
+
+- Đổi `USING_WATCHDOG_TIMER` từ `0` thành `1`.
+
+
+### Khi CM4 bị tắt trong lúc đang chạy
+
+- Main CPU không đổi state chỉ vì mất CM4.
+- Chu kỳ đèn và output card tiếp tục chạy.
+- Telemetry gửi sang CM4 không còn là điều kiện để state machine hoạt động.
+- Frame UART bị ngắt giữa chừng sẽ được parser timeout và phục hồi.
+
+### Khi CM4 bật lại
+
+- CM4 vẫn gửi START theo source hiện tại; Main CPU chấp nhận nhưng không cần lệnh này để chạy.
+- Các command đọc/ghi cũ tiếp tục được xử lý.
+
+## vị trí source đã sửa
+
+| Hạng mục | File | Dòng | Nội dung chính |
+|---|---|---:|---|
+| Main CPU tự khởi động | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L376-L450) | 376-450 | Bỏ chờ START, tự chạy card detect/state machine, khởi động và feed watchdog |
+| Kiểm tra schedule trong flash | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L247-L263) | 247-263 | Kiểm tra `num_side`, nạp và lưu schedule mặc định nếu dữ liệu sai |
+| Watchdog phần cứng | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L184-L198) | 184-198 | Tính reload và gọi `iwdg_init()` thật |
+| Bật cấu hình watchdog | [bsp_config.h](./si-main-THGT/Main_New/lib/bsp/bsp_config.h#L7) | 7 | Đổi `USING_WATCHDOG_TIMER` thành `1` |
+| Xử lý UART ngoài ISR | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L402-L450) | 402-450 | Xử lý frame card, RF và CM4 trong main context |
+| Xử lý UART khi đang dò card | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L1264-L1279) | 1264-1279 | Vẫn gọi `process_rx()` trước khi main loop bắt đầu |
+| Kiểm tra payload command CM4 | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L1852-L1894) | 1852-1894 | Kiểm tra kích thước frame trước khi đọc payload |
+| Kiểm tra phase đường sắt | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L1218-L1239) | 1218-1239 | Chặn `phase - 1` nếu phase nằm ngoài miền hợp lệ |
+Sửa vòng quét sensor | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L3033-L3091) | 3033-3091 | Chặn index, quét tối đa `MAX_SIDE`, không còn while vô hạn |
+
+
