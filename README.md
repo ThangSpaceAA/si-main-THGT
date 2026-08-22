@@ -62,11 +62,6 @@
 | Kiểm tra schedule trong flash | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L247-L263) | 247-263 | Kiểm tra `num_side`, nạp và lưu schedule mặc định nếu dữ liệu sai |
 | Watchdog phần cứng | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L184-L198) | 184-198 | Tính reload và gọi `iwdg_init()` thật |
 | Bật cấu hình watchdog | [bsp_config.h](./si-main-THGT/Main_New/lib/bsp/bsp_config.h#L7) | 7 | Đổi `USING_WATCHDOG_TIMER` thành `1` |
-| Xử lý UART ngoài ISR | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L402-L450) | 402-450 | Xử lý frame card, RF và CM4 trong main context |
-| Xử lý UART khi đang dò card | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L1264-L1279) | 1264-1279 | Vẫn gọi `process_rx()` trước khi main loop bắt đầu |
-| Kiểm tra payload command CM4 | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L1852-L1894) | 1852-1894 | Kiểm tra kích thước frame trước khi đọc payload |
-| Kiểm tra phase đường sắt | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L1218-L1239) | 1218-1239 | Chặn `phase - 1` nếu phase nằm ngoài miền hợp lệ |
-Sửa vòng quét sensor | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L3033-L3091) | 3033-3091 | Chặn index, quét tối đa `MAX_SIDE`, không còn while vô hạn |
 
 #### Đồng bộ trạng thái với Gateway
 
