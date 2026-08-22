@@ -139,6 +139,10 @@ type_mtfc_page_v_t mtfc_page_v_data;
 type_mtfc_page_v_t mtfc_card_config_data_glcd;
 type_mtfc_one_card_config_t mtfc_one_card_config;
 type_mtfc_one_card_config_t mtfc_one_card_config_card1;
+// Slot card duy nhat se duoc cap nhat vao cau hinh luu trong Flash.
+// Khong dung bang ket qua detect de ghi de ca 8 slot vi mot card co the
+// tam thoi mat phan hoi trong luc khoi dong.
+uint8_t mtfc_card_slot_pending_save = 0;
 type_mtfc_time_location_t mtfc_time_location;
 type_mtfc_config_part1_t mtfc_config_part1;
 /////////////////////
@@ -455,17 +459,23 @@ void mtfc_update_mtfc_parameters(type_mtfc_schedule_t *schedule, type_mtfc_cycle
 {
   if (mtfc_flag_system.is_card_update_card_parameters)
   {
-    for (uint8_t i = 0; i < MAX_SIDE; i++)
+    if ((mtfc_card_slot_pending_save >= 1) &&
+        (mtfc_card_slot_pending_save <= MAX_SIDE))
     {
-      config->index_card[i] = mtfc_card_config_search.index[i];
-      debug(MAIN_DEBUG, "\r\nmtfc_card_config_search.index[i]:%d", mtfc_card_config_search.index[i].is_railway_enabled);
-      // config->index_card[1] = mtfc_config_update.index_card[1];
-      // config->index_card[2] = mtfc_config_update.index_card[2];
+      uint8_t card_index = mtfc_card_slot_pending_save - 1;
+      config->index_card[card_index] = mtfc_card_config_search.index[card_index];
+      mtfc_mem.mem_save_data(BLOCK_1, (char *)config, sizeof(type_mtfc_config_t));
+      debug(DEBUG_GLCD, "Card slot [%d] saved!\r\n", mtfc_card_slot_pending_save);
+      mtfc_check_phase_connect_railway(mtfc_wk_base, config, schedule);
+      mtfc_flag_system.is_update_config_to_cloud = true;
     }
-    mtfc_mem.mem_save_data(BLOCK_1, (char *)config, sizeof(type_mtfc_config_t));
-    debug(DEBUG_GLCD, "%s\r\n", "Card saved all config!");
-    mtfc_check_phase_connect_railway(mtfc_wk_base, config, schedule);
-    mtfc_flag_system.is_update_config_to_cloud = true;
+    else
+    {
+      debug(MAIN_DEBUG, "\r\nReject save card config: invalid slot [%d]",
+            mtfc_card_slot_pending_save);
+    }
+
+    mtfc_card_slot_pending_save = 0;
     mtfc_flag_system.is_card_update_card_parameters = false;
   }
   if (mtfc_flag_system.is_update_location)
@@ -628,6 +638,9 @@ void mtfc_update_mtfc_parameters(type_mtfc_schedule_t *schedule, type_mtfc_cycle
     config->railway_delay_on_time = time_setting.time_delay_on_railway;
     config->railway_delay_off_time = time_setting.time_delay_off_railway;
     config->walking_walking_time = time_setting.time_walking;
+    // CM4 hien chi gui thoi gian walking, khong co command rieng de bat co
+    // walking_mode_enable. Thoi gian > 0 duoc xem la bat, = 0 la tat.
+    config->walking_mode_enable = (time_setting.time_walking > 0);
     config->dependent_phase_time = time_setting.time_delay_dependent_phase;
     debug(MAIN_DEBUG, "\r\nTime setting phase: %d\r\n", time_setting.phase);
 
@@ -776,7 +789,7 @@ void mtfc_send_mtfc_config(msp_serial *p, type_mtfc_config_t *mtfc_config)
   part1.is_enabale_out485_lamp_port = mtfc_config->is_enabale_out485_lamp_port;
   part1.railway_delay_on_time = mtfc_config->railway_delay_on_time;
   part1.railway_delay_off_time = mtfc_config->railway_delay_off_time;
-  part1.walking_mode_enable = mtfc_config->walking_mode_enable;
+  part1.walking_walking_time = mtfc_config->walking_walking_time;
   part1.latitude = mtfc_config->latitude;
   part1.longitude = mtfc_config->longitude;
   for (uint8_t i = 0; i < MAX_SIDE; i++)
@@ -1370,18 +1383,23 @@ void mtfc_card_rx_event_handler(uint8_t siz)
     debug(MAIN_DEBUG, "walking %d\r\n", mtfc_card_config_buff.is_walking_enabled);
     debug(MAIN_DEBUG, "dependent phase %d\r\n", mtfc_card_config_buff.is_dependent_phase);
     debug(MAIN_DEBUG, "time delay dependent phase %d\r\n", mtfc_card_config_buff.time_delay_dependent_phase);
-    if(mtfc_card_config_buff.is_dependent_phase == 1)
-    {
-      mtfc_card_config_search.index[mtfc_working_current_base.index_card_check - 2].time_delay_dependent_phase = mtfc_card_config_buff.time_delay_dependent_phase;
-      debug(MAIN_DEBUG, "card current: %d\r\n", mtfc_card_config_search.index[mtfc_working_current_base.index_card_check - 2].time_delay_dependent_phase);
-    }
     mtfc_flag_system.is_receive_card_config_feedback = true;
     break;
   case MSP_CARD_FB_CONFIG:
     t = check_card_com.read8();
-    main_rs232_com.send_byte(CMD_MASTER_TO_CPU_FB, CMD_MASTER_TO_CPU_FB_CARD_CONFIG);
-    if (t == 255) // Loi
+    if (mtfc_flag_system.is_card_one_slot_update &&
+        (t != 255) &&
+        (t == mtfc_one_card_config.phase))
+    {
+      mtfc_flag_system.is_card_fb_config = true;
+      main_rs232_com.send_byte(CMD_MASTER_TO_CPU_FB, CMD_MASTER_TO_CPU_FB_CARD_CONFIG);
+    }
+    else
+    {
       mtfc_flag_system.is_card_fb_config = false;
+      debug(MAIN_DEBUG, "\r\nInvalid card config ACK [%d], expected phase [%d]",
+            t, mtfc_one_card_config.phase);
+    }
     break;
   case MSP_CARD_DATA_SENSOR:
     check_card_com.readstruct((uint8_t *)&mtfc_sen_pkg, sizeof(type_sensor_pkg_t));
@@ -1407,7 +1425,10 @@ void mtfc_glcd_console(const char *format, ...)
 void mtfc_glcd_processing(type_mtfc_schedule_t *schedule, type_mtfc_cycle_working_package_t *mtfc_wk_base, type_mtfc_config_t *mtfc_config, type_date_time_t *rtc)
 {
   static uint32_t mtfc_glcd_time = millis();
-  static volatile bool is_send_config_data = false;
+  static uint32_t card_config_time = millis();
+  static bool is_send_config_data = false;
+  static uint8_t card_config_retry_count = 0;
+  const uint8_t max_card_config_retries = 3;
   static uint8_t temp_update_time = 0;
 #pragma region update du lieu len man hinh chinh
   if ((millis() - mtfc_glcd_time >= 1200) && (mtfc_wk_base->index_page_display <= 6)) // Cac goi tin gui 1.2s len man hinh
@@ -1498,56 +1519,97 @@ void mtfc_glcd_processing(type_mtfc_schedule_t *schedule, type_mtfc_cycle_workin
 
   if (mtfc_flag_system.is_card_one_slot_update)
   {
-    if ((millis() - mtfc_glcd_time) >= TIME_LOOP_SEND_CONFIG_CARD) // xu ly tien trinh theo chu ky
+    if ((millis() - card_config_time) >= TIME_LOOP_SEND_CONFIG_CARD)
     {
-      if (mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].imei == 0) // slot khong ton tai card
+      bool finish_config_request = false;
+      uint8_t requested_slot = mtfc_one_card_config.slot;
+
+      if ((requested_slot < 1) || (requested_slot > MAX_SIDE) ||
+          (mtfc_one_card_config.phase < 1) ||
+          (mtfc_one_card_config.phase > mtfc_wk_base->num_side))
       {
-        debug(MAIN_DEBUG, "%s\r\n", "Error! not found card!!");
-        mtfc_flag_system.is_card_one_slot_update = false; // Loi ko tim thay card. Xoa tien trinh cau hinh card
+        debug(MAIN_DEBUG, "\r\nReject card config: slot [%d], phase [%d]",
+              requested_slot, mtfc_one_card_config.phase);
+        finish_config_request = true;
       }
       else
       {
-        if (check_card_com.read_slot_slect_index() == 0) // Slot chua duoc chon. Nen chon slot truoc. 1s sau se gui cau hinh
+        uint8_t card_index = requested_slot - 1;
+        uint8_t selected_slot = check_card_com.read_slot_slect_index();
+
+        if (mtfc_card_config_search.index[card_index].imei == 0)
         {
-          check_card_com.cs_slot(mtfc_one_card_config.slot);
-          is_send_config_data = false;
+          debug(MAIN_DEBUG, "Error! Card slot [%d] was not detected\r\n",
+                requested_slot);
+          finish_config_request = true;
         }
-        else if ((check_card_com.read_slot_slect_index() == mtfc_one_card_config.slot) && (is_send_config_data == false)) // Ca
+        else if (selected_slot == 0)
         {
-          debug(MAIN_DEBUG, "one card config: %d\r\n", mtfc_one_card_config.slot);
-          for (uint8_t i; i < 32; i++)
-            mtfc_card_config_buff.sn[i] = mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].sn[i];
-          mtfc_card_config_buff.imei = mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].imei;
+          check_card_com.cs_slot(requested_slot);
+          is_send_config_data = false;
+          card_config_retry_count = 0;
+          mtfc_flag_system.is_card_fb_config = false;
+        }
+        else if (selected_slot != requested_slot)
+        {
+          // Giai phong mot slot con sot lai tu tac vu khac, sau do chon lai
+          // dung card o chu ky tiep theo.
+          check_card_com.free();
+          is_send_config_data = false;
+          card_config_retry_count = 0;
+          mtfc_flag_system.is_card_fb_config = false;
+        }
+        else if (mtfc_flag_system.is_card_fb_config)
+        {
+          // ACK hop le: chi cap nhat slot vua cau hinh. Tuyet doi khong copy
+          // ca bang detect vi slot khac co the tam thoi mat phan hoi.
+          mtfc_card_config_search.index[card_index] = mtfc_card_config_buff;
+          mtfc_card_slot_pending_save = requested_slot;
+          mtfc_flag_system.is_card_update_card_parameters = true;
+          debug(MAIN_DEBUG, "Sucessfull! Config Slot [%01d]!!\r\n", requested_slot);
+          finish_config_request = true;
+        }
+        else if (!is_send_config_data)
+        {
+          debug(MAIN_DEBUG, "one card config: %d, attempt: %d\r\n",
+                requested_slot, card_config_retry_count + 1);
+
+          // Sao chep tron cau hinh cua dung card de giu nguyen SN, IMEI va
+          // time delay. Cach nay cung loai bo vong lap SN co bien i chua khoi tao.
+          mtfc_card_config_buff = mtfc_card_config_search.index[card_index];
           mtfc_card_config_buff.phase = mtfc_one_card_config.phase;
           mtfc_card_config_buff.is_railway_enabled = mtfc_one_card_config.is_railway;
           mtfc_card_config_buff.is_dependent_phase = mtfc_one_card_config.is_dependent_phase;
           mtfc_card_config_buff.is_walking_enabled = mtfc_one_card_config.is_walking;
+
+          // Chi ACK nhan duoc sau lan gui nay moi duoc xem la thanh cong.
+          mtfc_flag_system.is_card_fb_config = false;
           check_card_com.send_struct(MSP_CARD_WRITE_CONFIG, (uint8_t *)&mtfc_card_config_buff, sizeof(type_one_cardConfig_t));
-          mtfc_flag_system.is_card_fb_config = true;
           is_send_config_data = true;
+          card_config_retry_count++;
         }
-        else if (is_send_config_data == true)
+        else if (card_config_retry_count < max_card_config_retries)
         {
-          if (mtfc_flag_system.is_card_fb_config == false)
-          {
-            debug(MAIN_DEBUG, "Error! Config Slot [%01d]!!\r\n", mtfc_one_card_config.slot);
-          }
-          else
-          {
-            // Luu thanh cong copy lai cac thong so vao vung dem
-            mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].phase = mtfc_card_config_buff.phase;
-            mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].is_railway_enabled = mtfc_card_config_buff.is_railway_enabled;
-            mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].is_dependent_phase = mtfc_card_config_buff.is_dependent_phase;
-            mtfc_card_config_search.index[mtfc_one_card_config.slot - 1].is_walking_enabled = mtfc_card_config_buff.is_walking_enabled;
-            mtfc_flag_system.is_card_update_card_parameters = true;
-            debug(MAIN_DEBUG, "Sucessfull! Config Slot [%01d]!!\r\n", mtfc_one_card_config.slot);
-          }
-          check_card_com.free();
-          mtfc_flag_system.is_card_one_slot_update = false;
           is_send_config_data = false;
+          debug(MAIN_DEBUG, "Retry Config Slot [%01d]\r\n", requested_slot);
+        }
+        else
+        {
+          debug(MAIN_DEBUG, "Error! Config Slot [%01d], no valid ACK!!\r\n",
+                requested_slot);
+          finish_config_request = true;
         }
       }
-      mtfc_glcd_time = millis();
+
+      if (finish_config_request)
+      {
+        check_card_com.free();
+        mtfc_flag_system.is_card_one_slot_update = false;
+        mtfc_flag_system.is_card_fb_config = false;
+        is_send_config_data = false;
+        card_config_retry_count = 0;
+      }
+      card_config_time = millis();
     }
   }
 #pragma endregion
@@ -1849,6 +1911,61 @@ void mtfc_ex_card_communication(type_mtfc_cycle_working_package_t *mtfc_wk, type
 }
 int aqw = 0;
 
+static uint8_t mtfc_station_route_for_gateway(void)
+{
+  if (mtfc_working_current_base.mtfc_working_state == mtfc_state_manual &&
+      mtfc_working_current_base.index_side_manual_select >= 1 &&
+      mtfc_working_current_base.index_side_manual_select <= 4)
+  {
+    return mtfc_working_current_base.index_side_manual_select;
+  }
+  return 0;
+}
+
+static uint8_t mtfc_station_railway_for_gateway(void)
+{
+  if (mtfc_working_current_base.mtfc_working_state == mtfc_state_off ||
+      !mtfc_config.railway_mode_enable)
+  {
+    return 0;
+  }
+  return mtfc_working_current_base.railway_signal ? 1 : 0;
+}
+
+static uint8_t mtfc_station_walking_for_gateway(void)
+{
+  if (mtfc_working_current_base.mtfc_working_state == mtfc_state_off ||
+      mtfc_config.walking_walking_time == 0)
+  {
+    return 0;
+  }
+  return mtfc_working_current_base.walking_signal ? 1 : 0;
+}
+
+static void mtfc_send_station_state_to_gateway(void)
+{
+  uint8_t station_route = mtfc_station_route_for_gateway();
+  uint8_t station_railway = mtfc_station_railway_for_gateway();
+  uint8_t station_walking = mtfc_station_walking_for_gateway();
+
+  main_rs232_com.send_byte(CMD_MASTER_TO_CPU_MODE_ACTIVE,
+                           mtfc_working_current_base.mtfc_working_state);
+  main_rs232_com.send_byte(CMD_MASTER_TO_CPU_SELECT_PHASE,
+                           station_route);
+  main_rs232_com.send_byte(CMD_MASTER_TO_CPU_RAILWAY_SIGNAL,
+                           station_railway);
+  main_rs232_com.send_byte(CMD_MASTER_TO_CPU_WALKING_SIGNAL,
+                           station_walking);
+
+  /* Keep the change detector aligned with the full snapshot so the next main
+   * loop does not retransmit the same four values. */
+  mtfc_working_buffer_update_qt.mtfc_working_state =
+      mtfc_working_current_base.mtfc_working_state;
+  mtfc_working_buffer_update_qt.index_side_manual_select = station_route;
+  mtfc_working_buffer_update_qt.railway_signal = station_railway;
+  mtfc_working_buffer_update_qt.walking_signal = station_walking;
+}
+
 static bool mtfc_ex_card_payload_is_valid(uint8_t cmd, uint8_t size)
 {
   switch (cmd)
@@ -1940,10 +2057,34 @@ void mtfc_ex_card_com_rx_event_handler(uint8_t siz)
     break;
 
   case CMD_CPU_TO_MASTER_CHANGE_PHASE_1:
-    main_rs232_com.readstruct((uint8_t *)&mtfc_one_card_config, sizeof(type_mtfc_one_card_config_t));
-    debug(MAIN_DEBUG, "\r\nOne slot card update: [%01d] [%01d] [%01d] [%01d] [%01d]", mtfc_one_card_config.slot, mtfc_one_card_config.phase, mtfc_one_card_config.is_railway, mtfc_one_card_config.is_walking, mtfc_one_card_config.is_dependent_phase);
-    mtfc_flag_system.is_card_one_slot_update = true;
+  {
+    type_mtfc_one_card_config_t card_config_request;
+    main_rs232_com.readstruct((uint8_t *)&card_config_request, sizeof(type_mtfc_one_card_config_t));
+    debug(MAIN_DEBUG, "\r\nOne slot card update: [%01d] [%01d] [%01d] [%01d] [%01d]", card_config_request.slot, card_config_request.phase, card_config_request.is_railway, card_config_request.is_walking, card_config_request.is_dependent_phase);
+
+    if (mtfc_flag_system.is_card_one_slot_update)
+    {
+      debug(MAIN_DEBUG, "%s", "\r\nReject card config: another request is running");
+    }
+    else if ((card_config_request.slot < 1) ||
+             (card_config_request.slot > MAX_SIDE) ||
+             (card_config_request.phase < 1) ||
+             (card_config_request.phase > mtfc_working_current_base.num_side) ||
+             (card_config_request.is_railway > 1) ||
+             (card_config_request.is_walking > 1) ||
+             (card_config_request.is_dependent_phase > 1))
+    {
+      debug(MAIN_DEBUG, "\r\nReject invalid card config: slot [%d], phase [%d]",
+            card_config_request.slot, card_config_request.phase);
+    }
+    else
+    {
+      mtfc_one_card_config = card_config_request;
+      mtfc_flag_system.is_card_fb_config = false;
+      mtfc_flag_system.is_card_one_slot_update = true;
+    }
     break;
+  }
 
   case CMD_CPU_TO_MASTER_SCHEDULE:
     main_rs232_com.send_struct(200, (uint8_t *)&cycle, sizeof(cycle_t));
@@ -2071,7 +2212,9 @@ void mtfc_ex_card_com_rx_event_handler(uint8_t siz)
 
   case CMD_CPU_TO_MASTER_START:
   {
+    (void)main_rs232_com.read8();
     mtfc_flag_system.start = true;
+    mtfc_send_station_state_to_gateway();
     break;
   }
 
@@ -2261,6 +2404,227 @@ void mtfc_railway_processing(type_mtfc_cycle_working_package_t *mtfc_wk_base, ty
   }
 }
 
+typedef enum
+{
+  mtfc_walking_idle = 0,
+  mtfc_walking_wait_current_phase,
+  mtfc_walking_active,
+  mtfc_walking_wait_release,
+} type_mtfc_walking_state_t;
+
+typedef struct
+{
+  type_mtfc_walking_state_t state;
+  bool input_raw;
+  bool input_stable;
+  bool output_immediately;
+  uint8_t phase_waiting;
+  uint16_t resume_t_seek;
+  uint32_t input_changed_ms;
+  uint32_t active_started_ms;
+  uint32_t last_output_ms;
+} type_mtfc_walking_control_t;
+
+static type_mtfc_walking_control_t mtfc_walking_control;
+
+static bool mtfc_walking_update_input(void)
+{
+  const uint32_t debounce_ms = 50;
+  bool input_now = check_in_main_com.read_walking_switch();
+
+  if (input_now != mtfc_walking_control.input_raw)
+  {
+    mtfc_walking_control.input_raw = input_now;
+    mtfc_walking_control.input_changed_ms = millis();
+  }
+
+  if ((input_now != mtfc_walking_control.input_stable) &&
+      ((millis() - mtfc_walking_control.input_changed_ms) >= debounce_ms))
+  {
+    mtfc_walking_control.input_stable = input_now;
+    return true;
+  }
+  return false;
+}
+
+static uint8_t mtfc_walking_find_current_phase(type_mtfc_cycle_working_package_t *mtfc)
+{
+  for (uint8_t i = 0; i < mtfc->num_side; i++)
+  {
+    if (bit_check(mtfc->signal[i], pin_green) ||
+        bit_check(mtfc->signal[i], pin_yellow))
+    {
+      return i + 1;
+    }
+  }
+  return 0;
+}
+
+static uint16_t mtfc_walking_find_resume_t_seek(type_mtfc_cycle_working_package_t *mtfc,
+                                                uint8_t phase_waiting)
+{
+  if ((phase_waiting >= 1) && (phase_waiting < mtfc->num_side))
+  {
+    return mtfc->side[phase_waiting].t_start_green;
+  }
+  if (phase_waiting == mtfc->num_side)
+  {
+    return mtfc->t;
+  }
+
+  /* The request arrived while all vehicle phases were already red. Resume at
+   * the next phase boundary after the walking interval. */
+  for (uint8_t i = 0; i < mtfc->num_side; i++)
+  {
+    if (mtfc->side[i].t_start_green > mtfc->t_seek)
+    {
+      return mtfc->side[i].t_start_green;
+    }
+  }
+  return mtfc->t;
+}
+
+static bool mtfc_walking_current_phase_finished(type_mtfc_cycle_working_package_t *mtfc)
+{
+  uint8_t phase = mtfc_walking_control.phase_waiting;
+  if ((phase == 0) || (phase > mtfc->num_side))
+  {
+    return true;
+  }
+
+  if (mtfc->mtfc_working_state == mtfc_state_auto)
+  {
+    return mtfc->t_seek >= mtfc->side[phase - 1].t_end_yellow;
+  }
+
+  return !bit_check(mtfc->signal[phase - 1], pin_green) &&
+         !bit_check(mtfc->signal[phase - 1], pin_yellow);
+}
+
+static bool mtfc_walking_state_processing(type_mtfc_cycle_working_package_t *mtfc,
+                                          type_mtfc_config_t *config)
+{
+  bool input_changed = mtfc_walking_update_input();
+  bool walking_allowed = (mtfc->mtfc_working_state != mtfc_state_off) &&
+                         (config->walking_walking_time > 0);
+
+  if (!walking_allowed)
+  {
+    mtfc->walking_signal = 0;
+    mtfc_walking_control.state = mtfc_walking_control.input_stable
+                                     ? mtfc_walking_wait_release
+                                     : mtfc_walking_idle;
+    return false;
+  }
+
+  if (input_changed && !mtfc_walking_control.input_stable &&
+      (mtfc_walking_control.state == mtfc_walking_wait_release))
+  {
+    mtfc_walking_control.state = mtfc_walking_idle;
+  }
+
+  /* Only the debounced rising edge creates a request. Holding the input active
+   * cannot repeatedly start new walking intervals. */
+  if (input_changed && mtfc_walking_control.input_stable &&
+      (mtfc_walking_control.state == mtfc_walking_idle))
+  {
+    mtfc_walking_control.phase_waiting = mtfc_walking_find_current_phase(mtfc);
+    mtfc_walking_control.resume_t_seek =
+        mtfc_walking_find_resume_t_seek(mtfc, mtfc_walking_control.phase_waiting);
+    mtfc_walking_control.state = mtfc_walking_wait_current_phase;
+    debug(MAIN_DEBUG, "\r\nWalking request, wait phase [%d]", mtfc_walking_control.phase_waiting);
+  }
+
+  if ((mtfc_walking_control.state == mtfc_walking_wait_current_phase) &&
+      mtfc_walking_current_phase_finished(mtfc))
+  {
+    mtfc_walking_control.state = mtfc_walking_active;
+    mtfc_walking_control.active_started_ms = millis();
+    mtfc_walking_control.last_output_ms = millis();
+    mtfc_walking_control.output_immediately = true;
+    mtfc->walking_signal = 1;
+    mtfc->current_phase_is_green = 0;
+    debug(MAIN_DEBUG, "\r\nWalking active for [%d] seconds", config->walking_walking_time);
+  }
+
+  if (mtfc_walking_control.state == mtfc_walking_active)
+  {
+    uint32_t duration_ms = ((uint32_t)config->walking_walking_time) * 1000UL;
+    if ((millis() - mtfc_walking_control.active_started_ms) >= duration_ms)
+    {
+      mtfc->walking_signal = 0;
+      if (mtfc->mtfc_working_state == mtfc_state_auto)
+      {
+        mtfc->t_seek = mtfc_walking_control.resume_t_seek;
+      }
+      mtfc_walking_control.state = mtfc_walking_control.input_stable
+                                       ? mtfc_walking_wait_release
+                                       : mtfc_walking_idle;
+      debug(MAIN_DEBUG, "%s", "\r\nWalking finished");
+      return false;
+    }
+    return true;
+  }
+
+  mtfc->walking_signal = 0;
+  return false;
+}
+
+static void mtfc_walking_output_processing(type_mtfc_cycle_working_package_t *mtfc,
+                                           type_mtfc_config_t *config)
+{
+  const uint32_t output_period_ms = 1000;
+  uint32_t now = millis();
+  if (!mtfc_walking_control.output_immediately &&
+      ((now - mtfc_walking_control.last_output_ms) < output_period_ms))
+  {
+    return;
+  }
+
+  uint32_t duration_ms = ((uint32_t)config->walking_walking_time) * 1000UL;
+  uint32_t elapsed_ms = now - mtfc_walking_control.active_started_ms;
+  uint32_t remaining_ms = (elapsed_ms < duration_ms) ? (duration_ms - elapsed_ms) : 0;
+  uint8_t remaining_seconds = (uint8_t)((remaining_ms + 999UL) / 1000UL);
+
+  mtfc->current_phase_is_green = 0;
+  for (uint8_t i = 0; i < mtfc->num_side; i++)
+  {
+    bool walking_phase_enabled = false;
+    for (uint8_t card_index = 0; card_index < MAX_SIDE; card_index++)
+    {
+      if ((config->index_card[card_index].imei != 0) &&
+          (config->index_card[card_index].phase == (i + 1)) &&
+          (config->index_card[card_index].is_walking_enabled == 1))
+      {
+        walking_phase_enabled = true;
+        break;
+      }
+    }
+
+    mtfc->signal[i] = 0;
+    bit_set(mtfc->signal[i], pin_red);
+    if (walking_phase_enabled)
+    {
+      // Nut walking chi bat WG tren phase co card da cho phep che do di bo.
+      bit_set(mtfc->signal[i], pin_walking_green);
+      bit_clear(mtfc->signal[i], pin_walking_red);
+    }
+    else
+    {
+      // Khong the tach rieng cac card cung phase tu Main; tat ca WG/WR cua
+      // phase khong duoc bat walking deu phai tat.
+      bit_clear(mtfc->signal[i], pin_walking_green);
+      bit_clear(mtfc->signal[i], pin_walking_red);
+    }
+    mtfc->countdown[i] = remaining_seconds;
+    mtfc_card_data_out.tm_cycle.countdown[i] = remaining_seconds;
+  }
+
+  mtfc_output_signal_data_to_card(mtfc, (uint8_t *)mtfc->signal, mtfc->num_side);
+  mtfc_walking_control.output_immediately = false;
+  mtfc_walking_control.last_output_ms = now;
+}
+
 void mtfc_normal_cpu_processing(void)
 {
   static uint32_t mtfc_ticker_normal_cpu = millis();
@@ -2268,15 +2632,44 @@ void mtfc_normal_cpu_processing(void)
   mtfc_working_current_base.mtfc_working_state = mtfc_read_signal_control(&mtfc_working_current_base, &mtfc_config);
   // TIN HIEU DUONG SAT
   mtfc_railway_processing(&mtfc_working_current_base, &mtfc_config, &mtfc_railway_work_base);
-  // CAC CHE DO HOAT DONG
+  // TIN HIEU DI BO: CHOT YEU CAU VA CHO PHA HIEN TAI KET THUC
+  bool mtfc_walking_is_active =
+      mtfc_walking_state_processing(&mtfc_working_current_base, &mtfc_config);
+  // GUI CAC TRANG THAI THAY DOI LEN GATEWAY
   if (mtfc_working_buffer_update_qt.mtfc_working_state != mtfc_working_current_base.mtfc_working_state)
   {
     mtfc_working_buffer_update_qt.mtfc_working_state = mtfc_working_current_base.mtfc_working_state;
     main_rs232_com.send_byte(CMD_MASTER_TO_CPU_MODE_ACTIVE, mtfc_working_buffer_update_qt.mtfc_working_state);
-    if (mtfc_working_buffer_update_qt.mtfc_working_state == 2)
-      main_rs232_com.send_byte(CMD_MASTER_TO_CPU_SELECT_PHASE, mtfc_working_current_base.index_side_manual_select);
   }
 
+  uint8_t station_route = mtfc_station_route_for_gateway();
+  if (mtfc_working_buffer_update_qt.index_side_manual_select != station_route)
+  {
+    mtfc_working_buffer_update_qt.index_side_manual_select = station_route;
+    main_rs232_com.send_byte(CMD_MASTER_TO_CPU_SELECT_PHASE, station_route);
+  }
+
+  uint8_t station_railway = mtfc_station_railway_for_gateway();
+  if (mtfc_working_buffer_update_qt.railway_signal != station_railway)
+  {
+    mtfc_working_buffer_update_qt.railway_signal = station_railway;
+    main_rs232_com.send_byte(CMD_MASTER_TO_CPU_RAILWAY_SIGNAL, station_railway);
+  }
+
+  uint8_t station_walking = mtfc_station_walking_for_gateway();
+  if (mtfc_working_buffer_update_qt.walking_signal != station_walking)
+  {
+    mtfc_working_buffer_update_qt.walking_signal = station_walking;
+    main_rs232_com.send_byte(CMD_MASTER_TO_CPU_WALKING_SIGNAL, station_walking);
+  }
+
+  if (mtfc_walking_is_active)
+  {
+    mtfc_walking_output_processing(&mtfc_working_current_base, &mtfc_config);
+    return;
+  }
+
+  // CAC CHE DO HOAT DONG
   if (mtfc_working_current_base.mtfc_working_state == mtfc_state_off) //<<<<<<<<<<<<<<<<<OFF MODE>>>>>>>
   {
     if (mtfc_config.is_flashing) // che do chop vang khi tat
@@ -2429,6 +2822,16 @@ void mtfc_output_signal_data_to_card(type_mtfc_cycle_working_package_t *mtfc, ui
       {
         // Chuyen doi truoc khi dich cai dat
         mtfc_card_data_out.mapping[i] = mtfc_set_side_to_red();
+        if ((mtfc->mtfc_working_state == mtfc_state_auto) &&
+            (mtfc->walking_signal == 0) &&
+            (mtfc_card_data_out.tm_cycle.countdown[i] >= 1) &&
+            (mtfc_card_data_out.tm_cycle.countdown[i] <= 4))
+        {
+          // Railway van giu den xe do, nhung khong duoc bat lai WG trong
+          // 4 giay do cuoi cua phase.
+          bit_clear(mtfc_card_data_out.mapping[i], pin_walking_green);
+          bit_set(mtfc_card_data_out.mapping[i], pin_walking_red);
+        }
         //
         mtfc->mapping[i] = mtfc_card_data_out.mapping[i];
         // Chuyen doi khi cai dat
@@ -2437,6 +2840,7 @@ void mtfc_output_signal_data_to_card(type_mtfc_cycle_working_package_t *mtfc, ui
       }
     }
   }
+
   // //(3)xoa du lieu cac phase khong su dung---------------------------------------------------
   // for (uint8_t i = num_side; i < MAX_SIDE; i++)
   // {
@@ -2474,7 +2878,6 @@ int count_tmp;
 
 int8_t mtfc_seek_lamp_signal_convert(type_mtfc_cycle_working_package_t *mtfc)
 {
-  uint8_t mtfc_walking_red_cus = 0;
   debug(DEBUG_SEEK_COUNTER, "\r\nconvert output t_seek - t: %03d - %03d", mtfc->t_seek, mtfc->t);
 
   // debug(DEBUG_SEEK_COUNTER, "\r\nmtfc->num_side: %d", mtfc->num_side);
@@ -2574,64 +2977,6 @@ int8_t mtfc_seek_lamp_signal_convert(type_mtfc_cycle_working_package_t *mtfc)
     }
 #pragma endregion
 
-#pragma region XU LY BO XANH DO
-    // DEN DI BO XANH----------------------------------------
-    if (bit_check(mtfc->signal[i], pin_red))
-    {
-      if (mtfc->t_seek < mtfc->t_flashing_wg.side[i].t_end_Wk_green)
-      {
-        if (i == 0)
-        {
-          if (mtfc->t_seek > mtfc->t_flashing_wg.side[i].t_start_flashing)
-            bit_flip(mtfc->signal[i], pin_walking_green);
-          else
-            bit_set(mtfc->signal[i], pin_walking_green);
-        }
-        else
-        {
-
-          if ((mtfc->t_seek > mtfc->t_flashing_wg.side[i].t_start_flashing) && (mtfc->t_seek < mtfc->side[i].t_end_yellow))
-            bit_flip(mtfc->signal[i], pin_walking_green);
-          else
-            bit_set(mtfc->signal[i], pin_walking_green);
-        }
-      }
-      else
-      {
-        bit_clear(mtfc->signal[i], pin_walking_green);
-        mtfc_walking_red_cus = 1;
-      }
-    }
-    else
-    {
-      bit_clear(mtfc->signal[i], pin_walking_green);
-    }
-
-    // DEN DI BO DO------------------------------------------
-    if (mtfc_walking_red_cus)
-    {
-      if (bit_check(mtfc->signal[i], pin_green) || bit_check(mtfc->signal[i], pin_yellow))
-      {
-        bit_set(mtfc->signal[i], pin_walking_red);
-      }
-      else
-      {
-        bit_clear(mtfc->signal[i], pin_walking_red);
-        bit_set(mtfc->signal[i], pin_walking_green);
-      }
-    }
-    else
-    {
-      if (bit_check(mtfc->signal[i], pin_green) || bit_check(mtfc->signal[i], pin_yellow))
-      {
-        bit_set(mtfc->signal[i], pin_walking_red);
-      }
-      else
-      {
-        bit_clear(mtfc->signal[i], pin_walking_red);
-      }
-    }
-#pragma endregion
   }
 
 #pragma region XU lY COUNTDOWN
@@ -2676,6 +3021,32 @@ int8_t mtfc_seek_lamp_signal_convert(type_mtfc_cycle_working_package_t *mtfc)
     mtfc->countdown[i] = (mtfc->countdown[i] > 0) ? (mtfc->countdown[i] - 1) : mtfc->countdown[i];
 #endif
   }
+
+#pragma region XU LY BO XANH DO THEO COUNTDOWN CUA TUNG PHASE
+  for (uint8_t i = 0; i < mtfc->num_side; i++)
+  {
+    bool vehicle_is_green_or_yellow =
+        bit_check(mtfc->signal[i], pin_green) ||
+        bit_check(mtfc->signal[i], pin_yellow);
+    bool vehicle_is_red = bit_check(mtfc->signal[i], pin_red);
+    uint8_t red_countdown = mtfc_card_data_out.tm_cycle.countdown[i];
+
+    if (vehicle_is_green_or_yellow ||
+        (vehicle_is_red && (red_countdown >= 1) && (red_countdown <= 4)))
+    {
+      // Xe xanh/vang, hoac 4 giay do cuoi: WG tat han, WR bat han.
+      bit_clear(mtfc->signal[i], pin_walking_green);
+      bit_set(mtfc->signal[i], pin_walking_red);
+    }
+    else if (vehicle_is_red)
+    {
+      // Den xe con do tren 4 giay: WG sang lien tuc, WR tat.
+      bit_set(mtfc->signal[i], pin_walking_green);
+      bit_clear(mtfc->signal[i], pin_walking_red);
+    }
+  }
+#pragma endregion
+
   // debug(MAIN_DEBUG, "%s\r\n", "<<<======================================================================>>>");
   for (int i = 0; i < check_card_num_card_dependent.card_insert_now; i++) // so 4 can thay doi theo so card dang hien hanh
   {

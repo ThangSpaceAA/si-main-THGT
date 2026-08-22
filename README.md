@@ -68,4 +68,36 @@
 | Kiểm tra phase đường sắt | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L1218-L1239) | 1218-1239 | Chặn `phase - 1` nếu phase nằm ngoài miền hợp lệ |
 Sửa vòng quét sensor | [main.cpp](./si-main-THGT/Main_New/src/main.cpp#L3033-L3091) | 3033-3091 | Chặn index, quét tối đa `MAX_SIDE`, không còn while vô hạn |
 
+#### Đồng bộ trạng thái với Gateway
 
+- Khi nhận `CMD_CPU_TO_MASTER_START` (`68`), Main trả ngay bốn frame:
+  - `CMD 19`: chế độ nguồn/làm việc.
+  - `CMD 20`: tuyến manual hiện tại; trả `0` khi không ở manual.
+  - `CMD 72`: tín hiệu đường sắt sau xử lý trễ.
+  - `CMD 73`: chế độ đi bộ đang thực sự hoạt động (sau khi pha xe hiện tại kết thúc).
+- Main cũng gửi lại từng frame khi giá trị tương ứng thay đổi.
+- Chuyển tuyến khi vẫn ở manual và thoát manual về Auto đều phát lại `CMD 20`.
+
+### Logic đèn WG/WR
+
+- Trong Auto, khi đèn xe xanh hoặc vàng: `WG` tắt và `WR` sáng liên tục.
+- Khi đèn xe đỏ còn trên 4 giây: `WG` sáng và `WR` tắt.
+- Trong 4 giây đỏ cuối (`4..1`): `WG` tắt hẳn và `WR` sáng hẳn, không chớp.
+- Nhánh ánh xạ đường sắt cũng giữ đúng trạng thái `WG` tắt, `WR` sáng trong 4 giây đỏ cuối.
+- Khi chế độ đi bộ do nút nhấn đang hoạt động: tất cả đèn xe về đỏ; phase được bật walking có `WG` sáng liên tục và `WR` tắt.
+
+
+### Đồng bộ trạng thái với CM4/Gateway
+
+- Bổ sung `CMD 72` để gửi trạng thái đường sắt đã qua xử lý delay.
+- Bổ sung `CMD 73` để gửi trạng thái walking thực tế, không gửi trực tiếp trạng thái thô của nút.
+- Khi CM4 gửi lệnh START, Main trả một snapshot gồm trạng thái làm việc, phase manual, đường sắt và walking.
+- Trong khi chạy, Main chỉ gửi lại từng trạng thái khi giá trị tương ứng thay đổi.
+
+
+### Vị trí chính
+
+| Hạng mục | Vị trí |
+|---|---|
+ WG/WR theo 4 giây đỏ cuối | [src/main.cpp](./src/main.cpp#L3025) |
+| Mã lệnh UART 72/73 | [serial_msp_code.h](./lib/bsp/serial_msp_code.h#L194) |

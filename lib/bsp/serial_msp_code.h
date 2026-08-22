@@ -191,4 +191,6 @@
 #define CMD_MASTER_TO_CPU_PHASE                     66
 #define CMD_MASTER_TO_CPU_FB_CARD_CONFIG            67
 #define CMD_CPU_TO_MASTER_START						68
+#define CMD_MASTER_TO_CPU_RAILWAY_SIGNAL             72
+#define CMD_MASTER_TO_CPU_WALKING_SIGNAL             73
 #endif
